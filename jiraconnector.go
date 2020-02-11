@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -48,15 +49,17 @@ type jiraPriority struct {
 	Priority string `json:"id"`
 }
 type kafkaMsg struct {
-	SrcIP        string `json:"srcip"`
-	DstIP        string `json:"dstip"`
-	Message      string `json:"message"`
-	Summary      string `json:"summary"`
-	Description  string `json:"desc"`
-	Timestamp    string `json:"@timestamp"`
-	CustomerID   string `json:"type"`
-	Organisation int    `json:"org"`
+	Logsource   string `json:"logsource"`
+	Logtype     string `json:"class"`
+	Timestamp   string `json:"@timestamp"`
+	ProjID      string `json:"type"`
+	OrgID       string `json:"orgid"`
+	Message     string `json:"message"`
+	Summary     string `json:"summary"`
+	Description string `json:"desc"`
 }
+
+var fields = []string{"logsource", "class", "@timestamp", "type", "orgid", "message", "summary", "desc", "srcip", "dstip"}
 
 type server struct {
 }
@@ -70,7 +73,6 @@ var (
 	jiraProjectID = flag.String("jira-project", "TI", "Jira project name")
 	user          = flag.String("user", "gw", "user name for Jira")
 	pass          = flag.String("pass", "1234", "Password for Jira")
-	msg           kafkaMsg
 	alert         jiraMsg
 	logger        *log.Logger
 	reader        *kafka.Reader
@@ -97,38 +99,68 @@ func getKafkaReader(kafkaURL, topic, groupID string) *kafka.Reader {
 	})
 }
 
-func convertKafkaJira(alarm kafkaMsg) jiraMsg {
+func convertKafkaJira(message map[string]interface{}) jiraMsg {
 	var msg jiraMsg
-
-	namesSrc, err := net.LookupAddr(alarm.SrcIP)
-
-	if err != nil {
-		msg.Fields.Srcname = ""
-	} else {
-		msg.Fields.Srcname = strings.Join(namesSrc, " ")
-	}
-
-	namesDst, err := net.LookupAddr(alarm.DstIP)
-	if err != nil {
-		msg.Fields.Dstname = ""
-	} else {
-		msg.Fields.Dstname = strings.Join(namesDst, " ")
-	}
-
-	if len(alarm.CustomerID) == 0 {
-
-		msg.Fields.Project.Key = *jiraProjectID
-	} else {
-		msg.Fields.Project.Key = alarm.CustomerID
-	}
-
-	msg.Fields.Summary = alarm.Summary
-	msg.Fields.Description = alarm.Description
+	msg.Fields.Organizations[0] = 8
 	msg.Fields.Issuetype.Id = "10007"
-	msg.Fields.SrcIP = alarm.SrcIP
-	msg.Fields.DstIP = alarm.DstIP
 	msg.Fields.Priority.Priority = "4"
-	msg.Fields.Organizations[0] = alarm.Organisation
+	msg.Fields.Project.Key = *jiraProjectID
+
+	// "logsource", "class", "@timestamp", "type", "orgid", "message", "summary", "desc", "srcip", "dstip"
+
+	for _, f := range fields {
+
+		s, found := message[f]
+
+		if found {
+
+			switch f {
+			case "logsource":
+				//msg.Logsource = s.(string)
+
+			case "class":
+				//msg.Logtype = s.(string)
+
+			case "type":
+				msg.Fields.Project.Key = s.(string)
+
+			case "orgid":
+				id, err := strconv.Atoi(s.(string))
+				if err == nil {
+					msg.Fields.Organizations[0] = id
+				}
+
+			case "message":
+				msg.Fields.Description += s.(string)
+
+			case "summary":
+				msg.Fields.Summary = s.(string)
+
+			case "desc":
+				msg.Fields.Description = s.(string)
+			case "srcip":
+				msg.Fields.SrcIP = s.(string)
+				namesSrc, err := net.LookupAddr(s.(string))
+
+				if err != nil {
+					msg.Fields.Srcname = ""
+				} else {
+					msg.Fields.Srcname = strings.Join(namesSrc, ";")
+				}
+			case "dstip":
+				msg.Fields.DstIP = s.(string)
+				namesDst, err := net.LookupAddr(s.(string))
+				if err != nil {
+					msg.Fields.Dstname = ""
+				} else {
+					msg.Fields.Dstname = strings.Join(namesDst, " ")
+				}
+
+			}
+		}
+
+	}
+
 	return msg
 }
 
@@ -142,9 +174,9 @@ func basicAuth(username, password string) string {
 	return base64.StdEncoding.EncodeToString([]byte(auth))
 }
 
-func sendJiraAlert() {
+func sendJiraAlert(message map[string]interface{}) {
 
-	jsonValue, _ := json.Marshal(convertKafkaJira(msg))
+	jsonValue, _ := json.Marshal(convertKafkaJira(message))
 
 	tr := &http.Transport{
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
@@ -192,6 +224,8 @@ func main() {
 
 	logger.Println("start consuming ... !!")
 
+	var f interface{}
+
 	start := time.Now()
 
 loop:
@@ -209,14 +243,21 @@ loop:
 				break
 			}
 
-			err = json.Unmarshal([]byte(m.Value), &msg)
+			err = json.Unmarshal([]byte(m.Value), &f)
 
 			if err != nil {
 				logger.Println(err)
 				break
 			}
 
-			sendJiraAlert()
+			if err != nil {
+				logger.Print(err)
+				break
+			}
+
+			msg := f.(map[string]interface{})
+
+			sendJiraAlert(msg)
 		}
 	}
 
