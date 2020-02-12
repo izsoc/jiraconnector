@@ -39,6 +39,7 @@ type jiraFields struct {
 	Priority      jiraPriority  `json:"priority"`
 	Srcname       string        `json:"customfield_10230"`
 	Dstname       string        `json:"customfield_10229"`
+	LogSourceType string        `json:"customfield_10502"`
 }
 
 type jiraMsg struct {
@@ -119,7 +120,7 @@ func convertKafkaJira(message map[string]interface{}) jiraMsg {
 				//msg.Logsource = s.(string)
 
 			case "class":
-				//msg.Logtype = s.(string)
+				msg.Fields.LogSourceType = s.(string)
 
 			case "type":
 				msg.Fields.Project.Key = s.(string)
@@ -131,13 +132,13 @@ func convertKafkaJira(message map[string]interface{}) jiraMsg {
 				}
 
 			case "message":
-				msg.Fields.Description += s.(string)
+				msg.Fields.Description += s.(string) + "\n"
 
 			case "summary":
 				msg.Fields.Summary = s.(string)
 
 			case "desc":
-				msg.Fields.Description = s.(string)
+				msg.Fields.Description += s.(string) + "\n"
 			case "srcip":
 				msg.Fields.SrcIP = s.(string)
 				namesSrc, err := net.LookupAddr(s.(string))
